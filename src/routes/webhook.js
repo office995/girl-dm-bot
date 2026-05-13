@@ -383,6 +383,12 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
+      // Final push enforcement: message 8 MUST end with "xoxo" (ManyChat uses this as the convo-end signal)
+      if (convoMeta.message_count === 8 && !/\bxoxo\b/i.test(aiText)) {
+        aiText = aiText.trim() + ' xoxo';
+        console.log('[XOXO] Forced xoxo onto message 8 for:', cid);
+      }
+
       replyTracker[cid] = {
         lastAiReply: aiText,
         sentAt: Date.now(),
