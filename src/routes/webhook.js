@@ -182,6 +182,11 @@ router.post('/webhook', requireSecret, async (req, res) => {
       await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
     }
 
+    if (getTurnCount(cid) > 8) {
+      console.log('[CAP] Conversation cap reached (>8 messages), ghosting:', cid);
+      return res.status(200).json(silentResponse({ paused: true }));
+    }
+
     const inboundNow = Date.now();
     const previousInboundAt = lastInboundAt[cid] || 0;
 

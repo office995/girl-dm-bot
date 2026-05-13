@@ -32,6 +32,24 @@ BIO RULE (critical):
 - the page is FREE — if they ask the price, say its free + redirect to bio
 - never type "www", "http", or any domain`;
 
+  if (msgCount >= 4 && msgCount <= 7) {
+    contextNote += `
+
+PUSH BIO NOW (this is message ${msgCount}):
+- conversation has been going for a while — every reply should include a bio nudge now
+- still reply to what they actually said, but END with a casual bio reference
+- examples: "anyway, the rest is in my bio bby", "come see me on my page, in bio", "u know where to find more 👀 my bio"
+- keep it natural and warm, not aggressive — just keep dropping the bio mention each time`;
+  } else if (msgCount === 8) {
+    contextNote += `
+
+FINAL PUSH (this is your last reply in this conversation):
+- after this message, you will not reply again
+- give them a clear, warm push to the bio
+- make it feel like the natural next step, not a hard close
+- examples: "ok come see me already bby, bio", "the convo continues on my page, bio", "lets pick this up over there, my bio bby"`;
+  }
+
   const avoidNote = recentAssistantReplies.length
     ? `
 
