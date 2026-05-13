@@ -294,12 +294,6 @@ router.post('/webhook', requireSecret, async (req, res) => {
         return res.status(200).json(silentResponse());
       }
 
-      const shouldOfferLink = /\b(join|subscribe|sub|buy|price|cost|how much|where|link|website|site|vip|private|of|onlyfans|fansly|fanvue|content|menu|custom|customs|interested|ready|see more|more pics|more videos)\b/i.test(msg);
-
-      if (shouldOfferLink && !convoMeta.has_sent_link && !aiText.includes('www.thejungle.life')) {
-        aiText += '\nwww.thejungle.life';
-      }
-
       let modelLead = false;
       let escalated = false;
 
@@ -380,7 +374,7 @@ router.post('/webhook', requireSecret, async (req, res) => {
       }
 
       dailyStats.totalOutbound++;
-      if (aiText.includes('www.thejungle.life')) dailyStats.closes++;
+      if (/\bbio\b/i.test(aiText)) dailyStats.closes++;
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
@@ -398,7 +392,7 @@ router.post('/webhook', requireSecret, async (req, res) => {
         turns: getTurnCount(cid),
         model_lead: modelLead,
         escalated,
-        close: aiText.includes('www.thejungle.life'),
+        close: /\bbio\b/i.test(aiText),
       });
 
       const cleanReply = (text) => text

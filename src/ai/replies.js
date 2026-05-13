@@ -6,20 +6,9 @@ const {
   isTooSimilarReply,
   findMostSimilarReply,
 } = require('../lib/text');
-const { userExplicitlyAsksForLink } = require('../lib/utils');
-
-function userShowsLinkIntent(text) {
-  return /\b(join|subscribe|sub|buy|price|cost|how much|where|link|website|site|vip|private|of|onlyfans|fansly|fanvue|content|menu|custom|customs|interested|ready|see more|more pics|more videos)\b/i.test(text || '');
-}
 
 async function callOpenAI(messages, convoMeta = {}, extraInstruction = '') {
   const msgCount = convoMeta.message_count || 0;
-  const linkSent = convoMeta.has_sent_link || false;
-
-  const lastUserMessage =
-    [...messages].reverse().find(m => m.role === 'user')?.content || '';
-
-  const userAskedAgain = userExplicitlyAsksForLink(lastUserMessage);
 
   const recentAssistantReplies = messages
     .filter(m => m.role === 'assistant')
@@ -32,37 +21,16 @@ async function callOpenAI(messages, convoMeta = {}, extraInstruction = '') {
 conversation state:
 - this is message #${msgCount}
 - keep it concise
-- one short line most of the time
-- two short lines max when needed
+- one short line most of the time, two short lines max
 - answer exactly what they asked
 - stay natural and conversational
-- do not overexplain`;
 
-  if (linkSent && !userAskedAgain) {
-    contextNote += `
-
-LINK RULE FOR THIS REPLY (very important):
-- you have ALREADY sent www.thejungle.life to this person earlier in the conversation
-- do NOT paste the link again in this reply
-- if you need to refer to it, say something like "in the link i sent above", "check the link above", or "it's in the link i sent" — do not paste the URL
-- the user did not explicitly ask for the link again, so do not include it`;
-  } else if (linkSent && userAskedAgain) {
-    contextNote += `
-
-LINK RULE FOR THIS REPLY:
-- the user is explicitly asking for the link again — it's ok to send it
-- end your reply with the link on its own line:
-www.thejungle.life`;
-  } else if (!linkSent && userShowsLinkIntent(lastUserMessage)) {
-    contextNote += `
-
-LINK RULE FOR THIS REPLY:
-- if it feels natural here, include the link on its own line at the end:
-www.thejungle.life`;
-  } else if (!linkSent) {
-    contextNote += `
-- only paste www.thejungle.life if they ask for the link, ask pricing, ask for proof, or clearly sound ready to join`;
-  }
+BIO RULE (critical):
+- NEVER paste a URL in your reply. no exceptions.
+- if they show buying intent (link, page, content, where, vip, price, custom, more pics, see more, etc.) — say it's in your bio
+- variations OK: "its in my bio", "check my bio", "link in my bio bby", "all in my bio", "my bio has everything"
+- the page is FREE — if they ask the price, say its free + redirect to bio
+- never type "www", "http", or any domain`;
 
   const avoidNote = recentAssistantReplies.length
     ? `
@@ -75,24 +43,16 @@ ${recentAssistantReplies.map((r, i) => `${i + 1}. "${r}"`).join('\n')}
 hard rules:
 - do not reuse any opener from above
 - do not reuse the same sentence structure
-- do not say the same thing the same way twice
-- if you would say something similar to any of the above, change it. fresh wording, same meaning.`
+- do not say the same thing the same way twice`
     : '';
 
-  const extraNote = extraInstruction
-    ? `
-
-extra instruction:
-${extraInstruction}`
-    : '';
+  const extraNote = extraInstruction ? `\n\nextra instruction:\n${extraInstruction}` : '';
 
   const fullPrompt = SYSTEM_PROMPT + contextNote + avoidNote + extraNote;
 
-  // First attempt
   let text = await callClaudeRaw('claude-haiku-4-5', fullPrompt, messages, 80);
   let finalText = humanizeReply(enforceLength(text));
 
-  // Retry up to twice if too similar to a prior reply, surfacing the offending text
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!isTooSimilarReply(messages, finalText)) break;
 

@@ -26,8 +26,8 @@ function getTurnCount(contactId) {
   return conversations[contactId].filter(m => m.role === 'user').length;
 }
 
-const LINK_URL = 'YOUR_MODEL_LINK_HERE';
-const LINK_REGEX = /(https?:\/\/(?:www\.)?YOURDOMAIN\.com\/?|www\.YOURDOMAIN\.com|YOUR_MODEL_LINK_HERE)/gi;
+const LINK_URL = '';
+const LINK_REGEX = /(?!)/;  // disabled: bot never sends URLs
 
 // Strict: only matches when the user clearly asks to be sent the URL.
 // Used to override the "link already sent — don't repeat it" rule.

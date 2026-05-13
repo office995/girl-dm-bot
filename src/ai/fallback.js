@@ -1,5 +1,5 @@
 // canned replies for when the api key is missing or the api is unreachable.
-// keep the voice on-brand: lowercase, direct, no fluff, no emojis.
+// voice: warm, casual, points to bio for anything page-related.
 
 function mockReply(messages) {
   const last = (messages[messages.length - 1]?.content || '').toLowerCase().trim();
@@ -9,44 +9,48 @@ function mockReply(messages) {
     return 'ok send your page, someone will check it\n[MODEL_LEAD]';
   }
 
+  if (/under 18|i'?m 1[0-7]|i am 1[0-7]|minor|high school/i.test(last)) {
+    return 'talk to me again when you turn 18 bby';
+  }
+
   if (/^(hey|hi|yo|sup|what's up|wsp|👋)$/i.test(last)) {
-    return 'hey you';
+    return 'Hi! what brought you to my dms';
   }
 
   if (/link|website|site|where.*see|see more|private|vip|onlyfans|fansly|fanvue|of\b/i.test(last)) {
-    return 'private page is here\nYOUR_MODEL_LINK_HERE';
+    return 'its on my account silly, check my bio';
   }
 
   if (/how much|price|cost|menu/i.test(last)) {
-    return 'prices are on there, you can see before you join\nYOUR_MODEL_LINK_HERE';
+    return 'its free!! come join me from my bio';
   }
 
-  if (/custom|customs|special request|pay|payment/i.test(last)) {
-    return 'maybe, depends what you want. send it and i’ll check [ESCALATE]';
+  if (/custom|customs|special request/i.test(last)) {
+    return 'i do it all on my page bby, link is in my bio';
   }
 
   if (/free|send pic|show me|nudes|nude/i.test(last)) {
-    return 'free preview is ig, the rest is private\nYOUR_MODEL_LINK_HERE';
+    return 'dude my page is free, just join from my bio';
   }
 
-  if (/cute|hot|beautiful|fine|sexy|bad/i.test(last)) {
-    return 'thank you, you’re not too bad yourself';
+  if (/cute|hot|beautiful|fine|sexy/i.test(last)) {
+    return "omg tyyy you're sweet";
   }
 
   if (/meet|pull up|date|come over|hangout|hang out/i.test(last)) {
-    return 'i don’t do meetups, babe';
+    return 'we gotta get to know each other first, my bio has my page';
   }
 
-  if (/bot|ai|real/i.test(last)) {
-    return 'i’ve got help with my dms, but yeah i see what comes through';
+  if (/bot|\bai\b|are you real|you real/i.test(last)) {
+    return 'yes im tots a bot lol';
   }
 
-  if (/under 18|i'm 17|i am 17|im 17|i'm 16|i am 16|im 16|minor/i.test(last)) {
-    return 'you gotta be 18+ for that, so i can’t help with it';
+  if (/single|\bbf\b|boyfriend|taken/i.test(last)) {
+    return 'sadly single 💀';
   }
 
-  if (turnCount <= 1) return 'what made you dm me';
-  return 'say what you really came for';
+  if (turnCount <= 1) return 'Hi! what brought you to my dms';
+  return 'check my bio bby';
 }
 
 module.exports = {
