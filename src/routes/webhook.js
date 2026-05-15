@@ -182,8 +182,8 @@ router.post('/webhook', requireSecret, async (req, res) => {
       await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
     }
 
-    if (getTurnCount(cid) > 8) {
-      console.log('[CAP] Conversation cap reached (>8 messages), ghosting:', cid);
+    if (getTurnCount(cid) > 3) {
+      console.log('[CAP] Conversation cap reached (>3 messages), ghosting:', cid);
       return res.status(200).json(silentResponse({ paused: true }));
     }
 
@@ -383,10 +383,10 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
-      // Final push enforcement: message 8 MUST end with "xoxo" (ManyChat uses this as the convo-end signal)
-      if (convoMeta.message_count === 8 && !/\bxoxo\b/i.test(aiText)) {
-        aiText = aiText.trim() + ' xoxo';
-        console.log('[XOXO] Forced xoxo onto message 8 for:', cid);
+      // Final push enforcement: message 3 MUST end with "laters" (ManyChat uses this as the convo-end signal)
+      if (convoMeta.message_count === 3 && !/\blaters\b/i.test(aiText)) {
+        aiText = aiText.trim() + ' laters';
+        console.log('[LATERS] Forced laters onto message 3 for:', cid);
       }
 
       replyTracker[cid] = {

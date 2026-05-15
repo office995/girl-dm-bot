@@ -1,18 +1,16 @@
 // Functional intent matcher — safety net for deterministic responses.
 
 const INTENTS = [
-  // Under-18 hard stop. Deterministic line, conversation pauses after.
   {
     name: 'underage',
     test: (m) => /\b(i'?m\s*1[0-7]\b|i\s*am\s*1[0-7]\b|im\s*1[0-7]\b|under\s*18|underage|minor|still\s*in\s*high\s*school|in\s*high\s*school)\b/i.test(m),
-    reply: 'talk to me again when you turn 18 bby',
+    reply: 'talk to me again when you turn 18',
     modelLead: false,
   },
-  // Model lead — flag and pause regardless of LLM output.
   {
     name: 'model_lead',
     test: (m) => /\b(i'?m\s*a\s*(model|creator|content\s*creator|influencer)|i\s*am\s*a\s*(model|creator|content\s*creator|influencer)|im\s*a\s*(model|creator|influencer)|i\s*do\s*content|i\s*create\s*content|need\s*(help|management)\s*(for|with)\s*my\s*(page|account|of)|want\s*(management|representation|to\s*be\s*managed|an\s*agency)|can\s*you\s*(manage|help\s*with)\s*my\s*(page|account|of)|collab|promo|partnership|represent\s*me)\b/i.test(m),
-    reply: 'ok send your page, someone will check it\n[MODEL_LEAD]',
+    reply: 'send your page, someone will check it\n[MODEL_LEAD]',
     modelLead: true,
   },
 ];
