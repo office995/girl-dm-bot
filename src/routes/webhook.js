@@ -187,6 +187,13 @@ router.post('/webhook', requireSecret, async (req, res) => {
       return res.status(200).json(silentResponse({ paused: true }));
     }
 
+    // Agency recruiter silent-ignore check
+    const isAgencyRecruiter = /\b(join\s*(our|my|the)\s*(agency|team|network|family)|we\s*(manage|grow|help|work\s*with)\s*(models|creators|girls|of\s*creators)|i\s*can\s*(manage|grow|help\s*with)\s*your\s*(page|account|of|onlyfans)|let\s*me\s*manage\s*(your|you)|we'?re\s*(hiring|looking\s*for|recruiting)\s*(creators|models|girls)|of\s*agency|run\s*an?\s*agency|i\s*run\s*an?\s*agency|come\s*work\s*(for|with)\s*us|we\s*help\s*(models|creators|girls)\s*(make|earn|grow)|sign\s*you\s*to)\b/i;
+    if (isAgencyRecruiter.test(msg)) {
+      console.log('[AGENCY] Recruiter detected, ignoring:', cid);
+      return res.status(200).json(silentResponse({ paused: true }));
+    }
+
     const inboundNow = Date.now();
     const previousInboundAt = lastInboundAt[cid] || 0;
 
@@ -383,10 +390,10 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
-      // Final push enforcement: message 3 MUST end with "laters" (ManyChat uses this as the convo-end signal)
-      if (convoMeta.message_count === 3 && !/\blaters\b/i.test(aiText)) {
-        aiText = aiText.trim() + ' laters';
-        console.log('[LATERS] Forced laters onto message 3 for:', cid);
+      // Final push enforcement: message 3 MUST end with "see u there" (ManyChat uses this as the convo-end signal)
+      if (convoMeta.message_count === 3 && !/see\s+u\s+there/i.test(aiText)) {
+        aiText = aiText.trim() + ' see u there';
+        console.log('[SEE_U_THERE] Forced see u there onto message 3 for:', cid);
       }
 
       replyTracker[cid] = {
