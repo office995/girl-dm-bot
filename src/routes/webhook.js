@@ -399,10 +399,16 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
-      // Final push enforcement: message 3 MUST end with "see u there" (ManyChat uses this as the convo-end signal)
-      if (convoMeta.message_count === 3 && !/see\s+u\s+there/i.test(aiText)) {
-        aiText = aiText.trim() + ' see u there';
-        console.log('[SEE_U_THERE] Forced see u there onto message 3 for:', cid);
+      // Final push enforcement: message 3 MUST mention bio AND end with "see u there"
+      if (convoMeta.message_count === 3) {
+        if (!/\bbio\b/i.test(aiText)) {
+          aiText = aiText.trim().replace(/[.!?]+$/, '') + '. link in my bio';
+          console.log('[BIO_FORCE] Forced bio mention on msg 3 for:', cid);
+        }
+        if (!/see\s+u\s+there/i.test(aiText)) {
+          aiText = aiText.trim().replace(/[.!?]+$/, '') + '. see u there';
+          console.log('[SEE_U_THERE] Forced see u there onto msg 3 for:', cid);
+        }
       }
 
       replyTracker[cid] = {
