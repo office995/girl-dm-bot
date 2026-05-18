@@ -63,8 +63,8 @@ startDedupCleanup();
 
 function silentResponse(meta = {}) {
   return {
-    reply: '',
-    ai_reply: '',
+    reply: '[silent]',
+    ai_reply: '[silent]',
     paused: Boolean(meta.paused),
     escalated: Boolean(meta.escalated),
     model_lead: Boolean(meta.model_lead),
@@ -180,6 +180,15 @@ router.post('/webhook', requireSecret, async (req, res) => {
 
     if (dbConvo && dbContact) {
       await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
+    }
+
+    // 5-min reply cooldown: if bot recently replied to this contact, stay silent.
+    // The inbound msg is already saved above, so next reply (after cooldown) has full context.
+    const REPLY_COOLDOWN_MS = 5 * 60 * 1000;
+    if (replyCooldown[cid] && Date.now() - replyCooldown[cid] < REPLY_COOLDOWN_MS) {
+      const remainingSec = Math.round((REPLY_COOLDOWN_MS - (Date.now() - replyCooldown[cid])) / 1000);
+      console.log('[COOLDOWN] Recent reply, going silent for:', cid, '(' + remainingSec + 's left, msg saved to context)');
+      return res.status(200).json(silentResponse());
     }
 
     if (getTurnCount(cid) > 3) {
