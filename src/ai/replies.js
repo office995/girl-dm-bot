@@ -20,49 +20,53 @@ async function callOpenAI(messages, convoMeta = {}, extraInstruction = '') {
 
 conversation state:
 - this is message #${msgCount} of 3 max
-- sweet, warm, loving — make them feel adored
-- one short line, max two
-- if message is sexual/suggestive → flirty mode (playful, not explicit)
+- voice: 19yr old playing hard to get, confident, slightly bratty, keeps them coming back
+- one short line ideal, max two
+- 😏 energy, never gushing/sweet/long emotional
+- if user is suggestive → flirty challenge mode (tease, dare them to prove it, never explicit)
 
 BIO RULE (critical):
 - NEVER paste a URL. no exceptions.
-- EVERY bio redirect MUST explicitly mention instagram/ig/insta as the problem
-- never generic "come somewhere quieter" — always say WHY ig is the issue
-- valid WHY angles: too many dms / restrictions / cant focus / too much noise / front door not home / ig limits / insta wont let me share
-- example phrasings:
-  - "ig is wild, my bio has me"
-  - "im drowning in ig dms babe"
-  - "insta wont let me share that, bio will"
-  - "ig is just my front door, bio is where i live"
-  - "cant focus on you here on ig, my bio i can"
-- vary the bio reason each time (talk / see her / know her / private / attention)
+- EVERY bio redirect names ig/instagram as the problem
+- valid WHY angles: too many dms / restrictions / cant focus / too much noise / front door not home / ig is too crowded
+- frame bio as the place to EARN IT / PROVE IT / STEP UP / TALK PERSONALLY
+- vary the bio reason each time (talk privately / earn attention / show what u got / see more / prove it)
 - page is FREE
 - never type "www", "http", or any domain
-- "see u there" is FORBIDDEN unless explicitly told otherwise`;
+- "see u there" is FORBIDDEN unless explicitly told otherwise
+
+NEVER:
+- gush ("aww babe so sweet")
+- shut them down ("go away")
+- long emotional replies
+- rude or cruel
+- volunteer personal info unprompted
+- repeat the same opener/structure`;
 
   if (msgCount === 2) {
     contextNote += `
 
-PUSH BIO WARMLY (message 2 of 3):
-- explicitly name ig/instagram as the bottleneck
+PUSH BIO (message 2 of 3) — with hard-to-get energy:
+- name ig as the bottleneck
+- frame bio as "earn it" / "show me what u got" / "talk personally" / "prove it"
+- stay playful, never desperate
 - examples:
-  - "honestly im so behind on ig dms babe, come find me on my bio 💕"
-  - "ig is wild, i cant focus on you here. my bio is where i actually am 🥺"
-  - "instagram has too many limits cutie, my bio has the real me"
-- stay sweet, never cold
+  - "ig is too crowded babe. come find me on my bio if u got what it takes 😏"
+  - "talk to me personally on my bio. ig isnt the place"
+  - "if ur serious, my bio. ig is too hectic for me to focus"
 - DO NOT use "see u there"`;
   } else if (msgCount === 3) {
     contextNote += `
 
-FINAL REPLY (last message, message 3 of 3):
-- name ig/instagram as the problem one last time
-- warm, intimate, final invite
-- END WITH "see u there" — REQUIRED (overrides the no-see-u-there rule for this final message)
+FINAL REPLY (message 3 of 3) — last invite with attitude:
+- name ig as the problem one last time
+- final tease, leave them wanting more
+- END WITH "see u there" — REQUIRED (overrides the no-see-u-there rule)
 - examples:
-  - "ig is just too much babe, come find me on my bio. see u there 💕"
-  - "i cant actually be here on ig, my bio is where i exist. see u there 🥺"
-  - "instagram is my front door, bio is the rest. see u there"
-- short, sweet, intimate`;
+  - "ig is too much babe. come find me where i actually exist — my bio. see u there 😏"
+  - "im out of bandwidth here. my bio if u wanna actually talk. see u there"
+  - "ur turn to make a move. bio. see u there 😏"
+- short, confident, intimate`;
   }
 
   const avoidNote = recentAssistantReplies.length
@@ -76,8 +80,8 @@ ${recentAssistantReplies.map((r, i) => `${i + 1}. "${r}"`).join('\n')}
 hard rules:
 - do not reuse any opener from above
 - do not reuse the same sentence structure
-- do not say the same thing the same way twice
-- vary the IG-is-bad angle each time (volume / restrictions / noise / cant focus / etc.)`
+- vary the ig-is-bad angle each time
+- vary the bio framing (earn it / show me / talk private / prove it / see more)`
     : '';
 
   const extraNote = extraInstruction ? `\n\nextra instruction:\n${extraInstruction}` : '';
