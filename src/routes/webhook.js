@@ -182,17 +182,10 @@ router.post('/webhook', requireSecret, async (req, res) => {
       await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
     }
 
-    // 5-min reply cooldown: if bot recently replied to this contact, stay silent.
-    // The inbound msg is already saved above, so next reply (after cooldown) has full context.
-    const REPLY_COOLDOWN_MS = 5 * 60 * 1000;
-    if (replyCooldown[cid] && Date.now() - replyCooldown[cid] < REPLY_COOLDOWN_MS) {
-      const remainingSec = Math.round((REPLY_COOLDOWN_MS - (Date.now() - replyCooldown[cid])) / 1000);
-      console.log('[COOLDOWN] Recent reply, going silent for:', cid, '(' + remainingSec + 's left, msg saved to context)');
-      return res.status(200).json(silentResponse());
-    }
 
-    if (getTurnCount(cid) > 3) {
-      console.log('[CAP] Conversation cap reached (>3 messages), ghosting:', cid);
+    const botReplyCount = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
+    if (botReplyCount >= 3) {
+      console.log('[CAP] Bot already replied 3 times, ghosting:', cid);
       return res.status(200).json(silentResponse({ paused: true }));
     }
 
