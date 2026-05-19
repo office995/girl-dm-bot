@@ -392,15 +392,24 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
-      // Final push enforcement: message 3 MUST mention bio AND end with "see u there"
-      if (convoMeta.message_count === 3) {
-        if (!/\bbio\b/i.test(aiText)) {
-          aiText = aiText.trim().replace(/[.!?]+$/, '') + '. link in my bio';
-          console.log('[BIO_FORCE] Forced bio mention on msg 3 for:', cid);
-        }
-        if (!/see\s+u\s+there/i.test(aiText)) {
-          aiText = aiText.trim().replace(/[.!?]+$/, '') + '. see u there';
-          console.log('[SEE_U_THERE] Forced see u there onto msg 3 for:', cid);
+      // On the 3rd bot reply, REPLACE with a hardcoded closing.
+      // Claude can't be trusted to close reliably, so we override it here.
+      const finalBotReplyCount = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
+      if (finalBotReplyCount === 3) {
+        const closings = [
+          'click the link in my bio. see u there',
+          'the link in my bio has me. see u there 😏',
+          'link in my bio babe. see u there',
+          'prove it on the link in my bio. see u there',
+          'link in my bio if u wanna talk. see u there',
+        ];
+        aiText = closings[Math.floor(Math.random() * closings.length)];
+        console.log('[MSG3] Replaced with hardcoded close for:', cid);
+
+        // Sync the just-pushed assistant message in conversations
+        const lastMsg = conversations[cid][conversations[cid].length - 1];
+        if (lastMsg && lastMsg.role === 'assistant') {
+          lastMsg.content = aiText;
         }
       }
 
