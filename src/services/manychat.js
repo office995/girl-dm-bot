@@ -14,20 +14,21 @@ async function sendMessage(manychatContactId, text) {
   }
 
   // Instagram-channel ManyChat payload.
-  // HUMAN_AGENT message tag is required by Meta's 24h rule.
-  // It tells Meta this is a real human responding within the 7-day
-  // human agent window, which is the only widely-supported tag for IG.
+  // The "type": "instagram" inside content tells ManyChat which channel
+  // to send through. Without it, ManyChat enforces the 24h tag rule.
+  // With it set correctly + the user inside the 24h window (they just DM'd us),
+  // no message_tag is needed.
   const body = {
     subscriber_id: manychatContactId,
     data: {
       version: 'v2',
       content: {
+        type: 'instagram',
         messages: [
           { type: 'text', text },
         ],
       },
     },
-    message_tag: 'HUMAN_AGENT',
   };
 
   console.log('[MANYCHAT] sendMessage payload:', JSON.stringify(body));
