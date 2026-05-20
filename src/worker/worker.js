@@ -6,7 +6,6 @@ const { sendMessage, addTag } = require('../services/manychat');
 const { callOpenAI } = require('../ai/replies');
 const {
   MAX_REPLIES_PER_CONTACT,
-  HARDCODED_CLOSE_MESSAGE,
 } = require('../config/env');
 
 let isRunning = false;
@@ -67,8 +66,8 @@ async function handleRow(row) {
 
   const isFinalMessage = replyNumber >= MAX_REPLIES_PER_CONTACT;
 
-  // Build the messages array. For msg 3 (final), we pass message_count
-  // so the prompt knows this is the close and should end with "see u there".
+  // Claude generates ALL messages (msg 1, 2, AND 3).
+  // For msg 3, the prompt tells Claude to include "see u there" at the end.
   const messagesForClaude = [{ role: 'user', content: message }];
   const convoMeta = {
     message_count: replyNumber,
@@ -85,20 +84,28 @@ async function handleRow(row) {
     replyText = null;
   }
 
-  // Safety net: if Claude failed or returned empty, fall back per message number
+  // Bare minimum fallback if Claude fully fails (network, timeout, etc).
+  // Not content replacement -- just so we don't send empty string.
   if (!replyText || !replyText.trim()) {
+    console.error('[WORKER] Claude returned empty for', contactId, '- using minimal fallback');
     if (isFinalMessage) {
-      replyText = HARDCODED_CLOSE_MESSAGE;
+      replyText = 'mmm insta is so messy babe, come find me on my bio, see u there';
     } else {
-      replyText = replyNumber === 1 ? "hey whats up" : "lol";
+      replyText = replyNumber === 1 ? 'hiii' : 'lol';
     }
   }
 
-  // For msg 3: if Claude didn't include "see u there", append the hardcoded
-  // close as a safety net to make sure the conversation actually ends.
+  // GUARANTEE: msg 3 must end with "see u there" so the convo actually ends.
+  // If Claude forgot, append it. Otherwise leave Claude's text alone.
   if (isFinalMessage && !replyText.toLowerCase().includes('see u there')) {
-    console.warn('[WORKER] Msg 3 from Claude missing "see u there", using hardcoded close instead');
-    replyText = HARDCODED_CLOSE_MESSAGE;
+    console.warn('[WORKER] Msg 3 missing "see u there" - appending');
+    replyText = replyText.trim();
+    // Add comma if Claude's reply doesn't end with punctuation
+    const lastChar = replyText.slice(-1);
+    if (!/[.,!?]/.test(lastChar)) {
+      replyText += ',';
+    }
+    replyText += ' see u there';
   }
 
   // Send via ManyChat
@@ -111,7 +118,6 @@ async function handleRow(row) {
   console.log('[WORKER] Sent reply #' + replyNumber + ' to', contactId);
 
   // Add end tag if this was the final message
-  // (either Claude wrote "see u there" or we used the hardcoded fallback)
   if (isFinalMessage) {
     const tagResult = await addTag(manychatContactId);
     if (!tagResult.ok) {
