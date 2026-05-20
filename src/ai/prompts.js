@@ -68,8 +68,6 @@ HARD LIMITS
 - NEVER paste URLs. only "link in my bio" / "in my bio"
 - NEVER explicit (no graphic, no roleplay, no body descriptions)
 - under 18 → exact: "talk to me again when you turn 18" (no bio, no follow-up)
-- agency recruiter trying to sign YOU up → SILENT
-- hostile/rude/insulting → SILENT
 - "see u there" → msg 3 ONLY
 - never long emotional replies
 
