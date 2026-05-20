@@ -13,6 +13,9 @@ async function sendMessage(manychatContactId, text) {
     return { ok: false, error: 'no_contact_id' };
   }
 
+  // Instagram-channel ManyChat payload.
+  // Removed `message_tag` (a Messenger-only concept).
+  // Subscriber ID stays as the {{contact.id}} value from the webhook body.
   const body = {
     subscriber_id: manychatContactId,
     data: {
@@ -23,8 +26,9 @@ async function sendMessage(manychatContactId, text) {
         ],
       },
     },
-    message_tag: 'ACCOUNT_UPDATE',
   };
+
+  console.log('[MANYCHAT] sendMessage payload:', JSON.stringify(body));
 
   try {
     const resp = await fetch(`${BASE_URL}/fb/sending/sendContent`, {
@@ -36,10 +40,14 @@ async function sendMessage(manychatContactId, text) {
       body: JSON.stringify(body),
     });
 
-    const json = await resp.json().catch(() => ({}));
+    const rawText = await resp.text();
+    let json = {};
+    try { json = JSON.parse(rawText); } catch (_) { json = { raw: rawText }; }
+
+    console.log('[MANYCHAT] sendMessage response status:', resp.status);
+    console.log('[MANYCHAT] sendMessage response body:', JSON.stringify(json));
 
     if (!resp.ok || json.status === 'error') {
-      console.error('[MANYCHAT] sendMessage failed:', resp.status, json);
       return { ok: false, error: 'api_error', status: resp.status, response: json };
     }
 
@@ -61,6 +69,8 @@ async function addTag(manychatContactId, tagName = END_TAG_NAME) {
     tag_name: tagName,
   };
 
+  console.log('[MANYCHAT] addTag payload:', JSON.stringify(body));
+
   try {
     const resp = await fetch(`${BASE_URL}/fb/subscriber/addTagByName`, {
       method: 'POST',
@@ -71,10 +81,14 @@ async function addTag(manychatContactId, tagName = END_TAG_NAME) {
       body: JSON.stringify(body),
     });
 
-    const json = await resp.json().catch(() => ({}));
+    const rawText = await resp.text();
+    let json = {};
+    try { json = JSON.parse(rawText); } catch (_) { json = { raw: rawText }; }
+
+    console.log('[MANYCHAT] addTag response status:', resp.status);
+    console.log('[MANYCHAT] addTag response body:', JSON.stringify(json));
 
     if (!resp.ok || json.status === 'error') {
-      console.error('[MANYCHAT] addTag failed:', resp.status, json);
       return { ok: false, error: 'api_error', status: resp.status, response: json };
     }
 
