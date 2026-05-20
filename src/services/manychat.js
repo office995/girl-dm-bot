@@ -14,8 +14,9 @@ async function sendMessage(manychatContactId, text) {
   }
 
   // Instagram-channel ManyChat payload.
-  // Removed `message_tag` (a Messenger-only concept).
-  // Subscriber ID stays as the {{contact.id}} value from the webhook body.
+  // HUMAN_AGENT message tag is required by Meta's 24h rule.
+  // It tells Meta this is a real human responding within the 7-day
+  // human agent window, which is the only widely-supported tag for IG.
   const body = {
     subscriber_id: manychatContactId,
     data: {
@@ -26,6 +27,7 @@ async function sendMessage(manychatContactId, text) {
         ],
       },
     },
+    message_tag: 'HUMAN_AGENT',
   };
 
   console.log('[MANYCHAT] sendMessage payload:', JSON.stringify(body));
