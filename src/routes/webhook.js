@@ -396,26 +396,7 @@ router.post('/webhook', requireSecret, async (req, res) => {
       if (modelLead) dailyStats.modelLeads++;
       if (escalated) dailyStats.escalations++;
 
-      // On the 3rd bot reply, REPLACE with a hardcoded closing.
-      // Claude can't be trusted to close reliably, so we override it here.
-      const finalBotReplyCount = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
-      if (finalBotReplyCount === 3) {
-        const closings = [
-          'click the link in my bio. see u there',
-          'the link in my bio has me. see u there 😏',
-          'link in my bio babe. see u there',
-          'prove it on the link in my bio. see u there',
-          'link in my bio if u wanna talk. see u there',
-        ];
-        aiText = closings[Math.floor(Math.random() * closings.length)];
-        console.log('[MSG3] Replaced with hardcoded close for:', cid);
 
-        // Sync the just-pushed assistant message in conversations
-        const lastMsg = conversations[cid][conversations[cid].length - 1];
-        if (lastMsg && lastMsg.role === 'assistant') {
-          lastMsg.content = aiText;
-        }
-      }
 
       replyTracker[cid] = {
         lastAiReply: aiText,
