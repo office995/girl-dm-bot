@@ -267,7 +267,7 @@ router.post('/webhook', requireSecret, async (req, res) => {
           // msg 3: pass message_count=2 so LLM replies naturally (code appends the close)
           const botReplyCountNow = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
           aiText = botReplyCountNow === 2
-            ? 'Honestly babe, enough chatting here, your talks are just too cozy and insta is not a right place to talk, lets take it somewhere else, checkout my bio for the link 😏'
+            ? 'Honestly babe, enough chatting here, your talks are just too cozy and insta is not a right place to talk, lets take it somewhere else, checkout my bio for the link 😏 see u there'
             : await callOpenAI(cleanContext, convoMeta, extraInstr);
         } catch (firstErr) {
           console.warn('[WEBHOOK] OpenAI failed, retrying in 2s:', firstErr.message);
