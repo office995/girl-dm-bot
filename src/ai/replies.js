@@ -49,17 +49,17 @@ MESSAGE 2 (SECOND REPLY — keep convo going):
   } else if (msgCount === 3) {
     contextNote += `
 
-MESSAGE 3 (FINAL REPLY — CLOSE IT):
-- ALWAYS mention "link in my bio" or "click the link in my bio"
-- ALWAYS end with "see u there" (REQUIRED — overrides no-see-u-there rule)
-- vary the phrasing:
-  - "click the link in my bio. see u there"
-  - "the link in my bio has me. see u there"
-  - "link in my bio babe. see u there 😏"
-  - "prove it on the link in my bio. see u there"
-  - "link in my bio if u wanna [talk/see more]. see u there"
-- NEVER say "come to my bio" or "find me on my bio" — always LINK click
-- short, confident`;
+MESSAGE 3 OVERRIDE — ACKNOWLEDGE ONLY, DO NOT CLOSE:
+- IGNORE the "msg 3 = close" rule in the main prompt — code appends the bio close automatically
+- your ONLY job: react/acknowledge what they said naturally, like msg 2
+- 1 short line, 3-7 words MAX
+- do NOT include "bio", "link", "page", or "see u there" — they will be stripped
+- examples:
+  - user says "what u doing" -> "just chillin lol"
+  - user says "where u from" -> "florida. u?"
+  - user says "u single" -> "yeah u?"
+  - user says "send pic" -> "lol no"
+  - user says "u real" -> "real enough lol"`;
   }
 
   const avoidNote = recentAssistantReplies.length
