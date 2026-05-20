@@ -1,493 +1,92 @@
 const express = require('express');
 const { requireSecret } = require('../middleware/auth');
-const { QUIET_WINDOW_MS, MAX_BURST_WINDOW_MS } = require('../config/env');
 const {
-  dailyStats,
-  resetDailyStatsIfNeeded,
-} = require('../state/stats');
+  getPendingForContact,
+  countProcessedForContact,
+  enqueueMessage,
+} = require('../db/queue');
 const {
-  conversations,
-  paused,
-  followUps,
-  followUpAttempts,
-  leadTypes,
-  contactNames,
-  lastActivity,
-  replyTracker,
-  linkSentCache,
-  recentWebhooks,
-  replyCooldown,
-  processingContacts,
-  pendingReplySeq,
-  burstStartedAt,
-  lastInboundAt,
-} = require('../state/memory');
-const {
-  sanitize,
-  sleep,
-  isEnglish,
-  trimConversation,
-  getTurnCount,
-  LINK_URL,
-  LINK_REGEX,
-  userExplicitlyAsksForLink,
-  splitBodyAndLink,
-} = require('../lib/utils');
-const { checkRateLimit } = require('../lib/rateLimit');
-const { createDedupHelpers } = require('../lib/dedup');
-const { supabase } = require('../db/supabase');
-const {
-  dbGetOrCreateContact,
-  dbUpdateContactClassification,
-  dbFlagContact,
-} = require('../db/contacts');
-const {
-  dbGetOrCreateConversation,
-  dbMarkLinkSent,
-  dbUpdateConversationStatus,
-} = require('../db/conversations');
-const {
-  dbSaveMessage,
-  dbLoadMessages,
-} = require('../db/messages');
-const { logToElla } = require('../lib/logger');
-const { createClassifier } = require('../ai/classify');
-const { callOpenAI } = require('../ai/replies');
-const { matchIntent } = require('../ai/intents');
+  REPLY_DELAY_MS,
+  MAX_REPLIES_PER_CONTACT,
+} = require('../config/env');
+const { sanitize } = require('../lib/utils');
 
 const router = express.Router();
 
-const { classifyIntent } = createClassifier(logToElla);
-const { dbDedup, startDedupCleanup } = createDedupHelpers(supabase);
-startDedupCleanup();
-
-function silentResponse(meta = {}) {
+function silentResponse() {
   return {
     reply: '[silent]',
-    ai_reply: '[silent]',
-    paused: Boolean(meta.paused),
-    escalated: Boolean(meta.escalated),
-    model_lead: Boolean(meta.model_lead),
     version: 'v2',
     content: { messages: [] },
-    _meta: { paused: false, escalated: false, model_lead: false, ...meta },
   };
 }
 
 router.post('/webhook', requireSecret, async (req, res) => {
   try {
-    const { contact_id, contact_name, latest_message, event_id, message_id, mid, timestamp, sent_at } = req.body;
+    const {
+      contact_id,
+      subscriber_id,
+      last_input_text,
+      latest_message,
+    } = req.body || {};
 
-    if (!contact_id || !latest_message) {
-      return res.status(400).json({ error: 'contact_id and latest_message are required' });
-    }
+    const incomingMessage = last_input_text || latest_message || '';
+    const contactIdRaw = contact_id || subscriber_id || '';
+    const manychatContactIdRaw = subscriber_id || contact_id || '';
 
-    const cid = sanitize(contact_id);
-    const cname = sanitize(contact_name || 'Unknown');
-    const msg = sanitize(latest_message);
-    const eventKey = sanitize(String(event_id || message_id || mid || ''));
-    const messageTs = Number(timestamp || sent_at || Date.now()) || Date.now();
-
-    // Detect test/gibberish input. If matched, route through the LLM with a
-    // strong nudge to ignore the meta nature of the message and just greet.
-    const isLowSignalInput = (() => {
-      const t = (msg || '').trim().toLowerCase();
-      if (!t) return true;
-      if (t.length <= 2) return true;
-      if (/^(test|testing|hello|hi|hey|yo|sup|wsp|wassup|ok|okay|k|cool|nice|hmm|idk|\.|\?|\!)+[\s\.,\?\!]*$/i.test(t)) return false; // normal short greetings are fine
-      if (/^(asdf|qwer|gibberish|lorem|abc|xyz|\?+|\.+|\!+|test\s*\d*)$/i.test(t)) return true;
-      if (/^[\W\d_]+$/.test(t)) return true; // only symbols/numbers
-      return false;
-    })();
-
-    const dedupKey = eventKey ? `${cid}:event:${eventKey}` : `${cid}:msg:${msg.slice(0, 80)}`;
-    const nowTs = Date.now();
-
-    if (recentWebhooks[dedupKey] && nowTs - recentWebhooks[dedupKey] < 30000) {
-      console.log('[DEDUP] Blocked duplicate (memory) from:', cid);
-      return res.status(200).json(silentResponse());
-    }
-
-    recentWebhooks[dedupKey] = nowTs;
-
-    const isDup = await dbDedup(dedupKey);
-    if (isDup) {
-      console.log('[DEDUP] Blocked duplicate (supabase) from:', cid);
-      return res.status(200).json(silentResponse());
-    }
-
-    if (!isEnglish(msg)) {
-      console.log('[LANG] Non-English message — going silent for:', cid);
-      return res.status(200).json(silentResponse());
-    }
-
-    if (!checkRateLimit(cid)) {
-      return res.status(429).json({ error: 'Rate limit exceeded (30/hr per contact)' });
-    }
-
-    resetDailyStatsIfNeeded(logToElla);
-    console.log('[WEBHOOK] Received:', { cid, cname, msg, eventKey });
-
-    if (msg.toLowerCase().trim() === 'yes tell me more' || msg.toLowerCase().trim() === 'private access') {
-      if (!conversations[cid]) conversations[cid] = [];
-      if (conversations[cid].length === 0) {
-        conversations[cid].push({ role: 'user', content: 'hey i saw your content and i want to know more about what you do' });
-      }
-    }
-
-    contactNames[cid] = cname;
-    lastActivity[cid] = new Date().toISOString();
-    dailyStats.totalInbound++;
-
-    const dbContact = await dbGetOrCreateContact(cid, cname);
-    let dbConvo = null;
-    if (dbContact) dbConvo = await dbGetOrCreateConversation(dbContact.id);
-
-    if (!conversations[cid]) dailyStats.newContacts++;
-
-    if (replyTracker[cid] && !replyTracker[cid].gotReply) {
-      replyTracker[cid].gotReply = true;
-      replyTracker[cid].replyDelayMs = Date.now() - replyTracker[cid].sentAt;
-      dailyStats.repliesReceived++;
-    }
-
-    if (paused[cid]) {
-      if (!conversations[cid]) conversations[cid] = [];
-      conversations[cid].push({ role: 'user', content: msg });
-      trimConversation(cid);
-
-      if (dbConvo && dbContact) {
-        await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
-      }
-
-      logToElla('info', 'dm_received_paused', { cid, name: cname });
-      return res.status(200).json(silentResponse({ paused: true }));
-    }
-
-    if (followUps[cid]) delete followUps[cid];
-
-    if (!conversations[cid]) {
-      if (dbContact) {
-        const dbHistory = await dbLoadMessages(dbContact.id, 40);
-        conversations[cid] = dbHistory || [];
-      } else {
-        conversations[cid] = [];
-      }
-    }
-
-    conversations[cid].push({ role: 'user', content: msg });
-    trimConversation(cid);
-
-    if (dbConvo && dbContact) {
-      await dbSaveMessage(dbConvo.id, dbContact.id, 'inbound', msg);
-    }
-
-
-    const botReplyCount = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
-    if (botReplyCount >= 3) {
-      console.log('[CAP] Bot already replied 3 times, ghosting:', cid);
-      return res.status(200).json(silentResponse({ paused: true }));
-    }
-
-    // Agency recruiter silent-ignore check
-    const isAgencyRecruiter = /\b(join\s*(our|my|the)\s*(agency|team|network|family)|we\s*(manage|grow|help|work\s*with)\s*(models|creators|girls|of\s*creators)|i\s*can\s*(manage|grow|help\s*with)\s*your\s*(page|account|of|onlyfans)|let\s*me\s*manage\s*(your|you)|we'?re\s*(hiring|looking\s*for|recruiting)\s*(creators|models|girls)|of\s*agency|run\s*an?\s*agency|i\s*run\s*an?\s*agency|come\s*work\s*(for|with)\s*us|we\s*help\s*(models|creators|girls)\s*(make|earn|grow)|sign\s*you\s*to)\b/i;
-    if (isAgencyRecruiter.test(msg)) {
-      console.log('[AGENCY] Recruiter detected, ignoring:', cid);
-      return res.status(200).json(silentResponse({ paused: true }));
-    }
-
-    const inboundNow = Date.now();
-    const previousInboundAt = lastInboundAt[cid] || 0;
-
-    if (!burstStartedAt[cid] || inboundNow - previousInboundAt > MAX_BURST_WINDOW_MS) {
-      burstStartedAt[cid] = inboundNow;
-    }
-
-    lastInboundAt[cid] = Math.max(inboundNow, messageTs || inboundNow);
-
-    const mySeq = (pendingReplySeq[cid] || 0) + 1;
-    pendingReplySeq[cid] = mySeq;
-
-    const burstElapsedMs = Math.max(0, inboundNow - burstStartedAt[cid]);
-    const remainingBurstMs = Math.max(0, MAX_BURST_WINDOW_MS - burstElapsedMs);
-    const waitMs = Math.min(QUIET_WINDOW_MS, remainingBurstMs || QUIET_WINDOW_MS);
-
-    console.log('[BURST] queued', { cid, mySeq, waitMs, burstElapsedMs });
-    await sleep(waitMs);
-
-    if (pendingReplySeq[cid] !== mySeq) {
-      console.log('[BURST] superseded before generation:', { cid, mySeq, latest: pendingReplySeq[cid] });
-      return res.status(200).json(silentResponse());
-    }
-
-    while (processingContacts[cid]) {
-      await sleep(250);
-      if (pendingReplySeq[cid] !== mySeq) {
-        console.log('[BURST] superseded while waiting for generation lock:', { cid, mySeq, latest: pendingReplySeq[cid] });
-        return res.status(200).json(silentResponse());
-      }
-    }
-
-    processingContacts[cid] = true;
-
-    try {
-      if (pendingReplySeq[cid] !== mySeq) {
-        console.log('[BURST] superseded after generation lock:', { cid, mySeq, latest: pendingReplySeq[cid] });
-        return res.status(200).json(silentResponse());
-      }
-
-      const convoMeta = {
-        message_count: getTurnCount(cid),
-        has_sent_link: linkSentCache[cid] || dbConvo?.has_sent_link || false,
-      };
-
-      let aiText;
-
-      // Hardcoded intent matcher — runs before the LLM.
-      // If the user's message matches one of the 20 known scenarios,
-      // reply with the exact template. Otherwise fall through to Claude.
-      const matched = matchIntent(msg);
-      if (matched) {
-        console.log('[INTENT]', { cid, intent: matched.intent });
-        aiText = matched.reply;
-      } else {
-        const extraInstr = isLowSignalInput
-          ? 'the user just sent something very short, vague, or test-like. do NOT analyze, comment on, or speculate about what they really mean. just send one short casual line like "what\'s good. what made you reach out" or "yo. what\'s up". never mention testing, bugs, ai, or being a bot.'
-          : '';
-
-        // Scrub past meta-contaminated assistant turns from the context.
-        // Old turns saved before the no-meta fix can anchor Haiku into mirroring them.
-        const META_CONTEXT_REGEX = /\b(testing me|am not bugged|am i bugged|are you (a |an )?(bot|ai|real)|what do you (actually|really) (want|need|after)|what u (actually|really) (want|need|after)|is this a test|am i being tested|you (just )?messing|you (just )?fucking with me|you for real|are you for real|stop wasting my time|talking to a (bot|ai)|is this real)\b/i;
-        const cleanContext = conversations[cid].filter((m) => {
-          if (m.role !== 'assistant') return true;
-          return !META_CONTEXT_REGEX.test(m.content || '');
-        });
-
-        try {
-          // msg 3: pass message_count=2 so LLM replies naturally (code appends the close)
-          const botReplyCountNow = (conversations[cid] || []).filter(m => m.role === 'assistant').length;
-          aiText = botReplyCountNow === 2
-            ? 'Honestly babe, enough chatting here, your talks are just too cozy and insta is not a right place to talk, lets take it somewhere else, checkout my bio for the link 😏 see u there'
-            : await callOpenAI(cleanContext, convoMeta, extraInstr);
-        } catch (firstErr) {
-          console.warn('[WEBHOOK] OpenAI failed, retrying in 2s:', firstErr.message);
-          await sleep(2000);
-
-          try {
-            aiText = await callOpenAI(cleanContext, convoMeta, extraInstr);
-          } catch (retryErr) {
-            console.error('[WEBHOOK] OpenAI retry failed:', retryErr.message);
-            const fallbackText = 'one sec, slammed rn. back in a min';
-            return res.json({
-              reply: fallbackText,
-              ai_reply: fallbackText,
-              paused: false,
-              escalated: false,
-              model_lead: false,
-              version: 'v2',
-              content: { messages: [{ type: 'text', text: fallbackText }] },
-              _meta: { paused: false, escalated: false, model_lead: false },
-            });
-          }
-        }
-      }
-
-      // Last-resort guard: if the LLM produced meta-text anyway, replace with safe greeting
-      const META_REGEX = /\b(testing me|am not bugged|am i bugged|are you (a |an )?(bot|ai|real)|what do you (actually|really) (want|need|after)|what u (actually|really) (want|need|after)|what (you|u) tryna get at|is this a test|am i being tested|you (just )?messing (with me|around)|you (just )?fucking with me|you for real|are you for real|stop wasting my time|you a (real )?person|real human|come on bro|don't waste my time|u testing me|u bugged|u trying to test|u real|are u real|are u a (bot|ai|real)|talking to a (bot|ai)|is this real|am i talking to a real person)\b/i;
-
-      if (META_REGEX.test(aiText)) {
-        console.warn('[META-GUARD] Bot produced meta output, overriding:', aiText.slice(0, 80));
-        const safeOverrides = [
-          "what's good. what made you reach out",
-          "what's up. what you tryna figure out",
-          "yo. what brought you to my dms",
-          "what's good. what specifically you wanna know",
-          "what's up. what's the actual question",
-        ];
-        aiText = safeOverrides[Math.floor(Math.random() * safeOverrides.length)];
-      }
-
-      if (pendingReplySeq[cid] !== mySeq) {
-        console.log('[BURST] stale OpenAI reply discarded:', { cid, mySeq, latest: pendingReplySeq[cid] });
-        return res.status(200).json(silentResponse());
-      }
-
-      let modelLead = false;
-      let escalated = false;
-
-      if (aiText.includes('[MODEL_LEAD]')) {
-        modelLead = true;
-        aiText = aiText.replace(/\n?\r?\n?\[MODEL_LEAD\]/g, '').trim();
-        paused[cid] = { at: new Date().toISOString(), reason: 'model_lead' };
-        leadTypes[cid] = 'MODEL';
-        await dbUpdateContactClassification(cid, 'MODEL');
-        await dbFlagContact(cid, true);
-
-        if (dbConvo) await dbUpdateConversationStatus(dbConvo.id, 'flagged');
-        if (dbConvo && dbContact) {
-          await dbSaveMessage(dbConvo.id, dbContact.id, 'outbound', aiText || '[MODEL_LEAD]');
-        }
-
-        dailyStats.modelLeads++;
-
-        // if the model produced an acknowledgment ("ok one sec, someone will hit you up"),
-        // send it before pausing. if it's empty, stay silent (legacy behavior).
-        if (!aiText) {
-          return res.status(200).json(silentResponse({ paused: true, model_lead: true }));
-        }
-
-        return res.json({
-          reply: aiText,
-          ai_reply: aiText,
-          paused: true,
-          escalated: false,
-          model_lead: true,
-          version: 'v2',
-          content: { messages: [{ type: 'text', text: aiText }] },
-          _meta: { paused: true, escalated: false, model_lead: true },
-        });
-      }
-
-      if (aiText.includes('[ESCALATE]')) {
-        escalated = true;
-        aiText = aiText.replace(/\n?\r?\n?\[ESCALATE\]/g, '').trim();
-        paused[cid] = { at: new Date().toISOString(), reason: 'escalate' };
-        await dbFlagContact(cid, true);
-
-        if (dbConvo) await dbUpdateConversationStatus(dbConvo.id, 'flagged');
-      }
-
-      if (!leadTypes[cid] && !modelLead) {
-        try {
-          const classification = await classifyIntent(msg);
-          leadTypes[cid] = classification;
-          await dbUpdateContactClassification(cid, classification);
-        } catch (_) {
-          leadTypes[cid] = 'BUYER';
-          await dbUpdateContactClassification(cid, 'BUYER');
-        }
-      }
-
-      conversations[cid].push({ role: 'assistant', content: aiText });
-      trimConversation(cid);
-
-      if (dbConvo && dbContact) {
-        await dbSaveMessage(dbConvo.id, dbContact.id, 'outbound', aiText);
-      }
-
-      if (!paused[cid] && leadTypes[cid] === 'BUYER') {
-        const attemptsSent = followUpAttempts[cid] || 0;
-
-        if (attemptsSent < 2) {
-          const delay = attemptsSent === 0 ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-          const fuMsg = attemptsSent === 0 ? '[FOLLOW_UP_1]' : '[FOLLOW_UP_2]';
-
-          followUps[cid] = {
-            msg: fuMsg,
-            sendAt: new Date(Date.now() + delay).toISOString(),
-            attempt: attemptsSent + 1,
-            contactName: cname,
-          };
-        }
-      }
-
-      dailyStats.totalOutbound++;
-      if (/\bbio\b/i.test(aiText)) dailyStats.closes++;
-      if (modelLead) dailyStats.modelLeads++;
-      if (escalated) dailyStats.escalations++;
-
-
-
-      replyTracker[cid] = {
-        lastAiReply: aiText,
-        sentAt: Date.now(),
-        gotReply: false,
-        replyDelayMs: null,
-      };
-
-      logToElla('info', 'dm_exchange', {
-        cid,
-        name: cname,
-        lead_type: leadTypes[cid],
-        turns: getTurnCount(cid),
-        model_lead: modelLead,
-        escalated,
-        close: /\bbio\b/i.test(aiText),
+    if (!contactIdRaw || !incomingMessage) {
+      console.warn('[WEBHOOK] Missing contact_id or message', { body: req.body });
+      return res.status(400).json({
+        error: 'contact_id and message (last_input_text/latest_message) are required',
       });
-
-      const cleanReply = (text) => text
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/\n +/g, '\n')
-        .replace(/\n /g, '\n')
-        .replace(/\[([^\]]*)\]/g, '')
-        .replace(/[ \t]{2,}/g, ' ')
-        .trim();
-
-      const cleanedText = cleanReply(aiText);
-
-      // Link delivery logic:
-      // - if link is in the reply AND user explicitly asked again OR link not yet sent → send as separate message
-      // - if link is in the reply AND link already sent AND user did not explicitly ask → strip it
-      const linkAlreadySent = convoMeta.has_sent_link === true;
-      const userAskedForLink = userExplicitlyAsksForLink(msg);
-      const replyContainsLink = LINK_REGEX.test(cleanedText);
-      LINK_REGEX.lastIndex = 0;
-
-      let bodyText = cleanedText;
-      let linkText = '';
-
-      if (replyContainsLink) {
-        const split = splitBodyAndLink(cleanedText);
-        bodyText = split.body;
-        if (!linkAlreadySent || userAskedForLink) {
-          linkText = split.link;
-        }
-      }
-
-      // Track link sent state if we're actually sending it now
-      if (linkText && !linkAlreadySent) {
-        linkSentCache[cid] = true;
-        if (dbConvo) await dbMarkLinkSent(dbConvo.id);
-        convoMeta.has_sent_link = true;
-      }
-
-      // Build messages array — two sends if both body and link, one if just body
-      const messagesArr = [];
-      if (bodyText) messagesArr.push({ type: 'text', text: bodyText });
-      if (linkText) messagesArr.push({ type: 'text', text: linkText });
-      if (messagesArr.length === 0) {
-        // Edge case: AI generated only the link and we're suppressing it
-        // (already sent, no explicit re-ask). Fall back to a reference.
-        if (replyContainsLink && linkAlreadySent && !userAskedForLink) {
-          messagesArr.push({ type: 'text', text: 'it\'s all in the link i sent above' });
-        } else {
-          messagesArr.push({ type: 'text', text: cleanedText });
-        }
-      }
-
-      // Concatenated form for legacy reply/ai_reply fields
-      const finalText = messagesArr.map(m => m.text).join('\n');
-
-      replyCooldown[cid] = Date.now();
-
-      return res.json({
-        reply: finalText,
-        ai_reply: finalText,
-        paused: false,
-        escalated,
-        model_lead: modelLead,
-        version: 'v2',
-        content: { messages: messagesArr },
-        _meta: { paused: false, escalated, model_lead: modelLead, link_sent_now: !!linkText },
-      });
-    } finally {
-      delete processingContacts[cid];
-      if (pendingReplySeq[cid] === mySeq) delete burstStartedAt[cid];
     }
+
+    const contactId = sanitize(String(contactIdRaw));
+    const manychatContactId = sanitize(String(manychatContactIdRaw));
+    const message = sanitize(String(incomingMessage));
+
+    console.log('[WEBHOOK] Received', { contactId, msg: message.slice(0, 80) });
+
+    const pending = await getPendingForContact(contactId);
+    if (pending) {
+      console.log('[WEBHOOK] Timer already running for', contactId, '- ignoring');
+      return res.status(200).json(silentResponse());
+    }
+
+    const processedCount = await countProcessedForContact(contactId);
+    const replyNumber = processedCount + 1;
+
+    if (replyNumber > MAX_REPLIES_PER_CONTACT) {
+      console.log('[WEBHOOK] Contact', contactId, 'has hit max replies, ghosting');
+      return res.status(200).json(silentResponse());
+    }
+
+    const scheduledAt = new Date(Date.now() + REPLY_DELAY_MS).toISOString();
+
+    const row = await enqueueMessage({
+      contactId,
+      manychatContactId,
+      message,
+      replyNumber,
+      scheduledAt,
+    });
+
+    if (!row) {
+      console.error('[WEBHOOK] Failed to enqueue for', contactId);
+      return res.status(200).json(silentResponse());
+    }
+
+    console.log('[WEBHOOK] Queued reply', {
+      contactId,
+      replyNumber,
+      scheduledAt,
+      rowId: row.id,
+    });
+
+    return res.status(200).json(silentResponse());
   } catch (err) {
-    console.error('[WEBHOOK ERROR]', err.message);
-    logToElla('error', 'webhook_error', { error: err.message, stack: err.stack });
-    return res.status(500).json({ error: 'Internal error', detail: err.message });
+    console.error('[WEBHOOK ERROR]', err.message, err.stack);
+    return res.status(200).json(silentResponse());
   }
 });
 

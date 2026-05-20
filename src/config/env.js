@@ -40,6 +40,14 @@ const MAX_BURST_WINDOW_MS = Number(process.env.MAX_BURST_WINDOW_MS || 15000);
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
+// Queue-based delayed reply system
+const MANYCHAT_API_KEY = process.env.MANYCHAT_API_KEY || '';
+const REPLY_DELAY_MS = Number(process.env.REPLY_DELAY_MS || 300000);
+const MAX_REPLIES_PER_CONTACT = Number(process.env.MAX_REPLIES_PER_CONTACT || 3);
+const END_TAG_NAME = process.env.END_TAG_NAME || 'end';
+const HARDCODED_CLOSE_MESSAGE = process.env.HARDCODED_CLOSE_MESSAGE
+  || "Honestly babe, enough chatting here, your talks are just too cozy and insta is not a right place to talk, lets take it somewhere else, checkout my bio for the link 😏 see u there";
+
 module.exports = {
   PORT,
   ANTHROPIC_API_KEY,
@@ -49,4 +57,9 @@ module.exports = {
   MAX_BURST_WINDOW_MS,
   SUPABASE_URL,
   SUPABASE_SERVICE_KEY,
+  MANYCHAT_API_KEY,
+  REPLY_DELAY_MS,
+  MAX_REPLIES_PER_CONTACT,
+  END_TAG_NAME,
+  HARDCODED_CLOSE_MESSAGE,
 };
