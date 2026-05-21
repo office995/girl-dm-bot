@@ -10,6 +10,53 @@ const {
 
 let isRunning = false;
 
+// 18 closer variants for msg 3. Worker picks one at random and appends to Claude's
+// short reaction. Each one MUST end with "see u there" (last 3 words).
+const MSG3_CLOSERS = [
+  'but insta is honestly horrible lol i get like 100 dms here, come find me on my bio, see u there',
+  'insta is so messy w all the dms tho, lets chat where its just us, link in my bio, see u there',
+  'but i cant rly chat on here, way too many dms, find me on my page, see u there',
+  'insta gets so cluttered tho, find me somewhere private, link in my bio, see u there',
+  'but insta is the worst for real chats, come find me on my bio, see u there',
+  'honestly insta is a mess rn, lets talk somewhere else, link in my bio, see u there',
+  'but i cant rly focus on here w so many dms 🙈 find me on my page, see u there',
+  'insta keeps blocking my msgs too 😩 come find me where its chill, link in my bio, see u there',
+  'but lets be real insta sucks for this, come find me somewhere private, link in my bio, see u there',
+  'insta is so overwhelming tho, lets chat somewhere quieter, link in my bio, see u there',
+  'but i barely check insta dms honestly, find me on my page, link in my bio, see u there',
+  'insta is too messy for real talks lol, come find me on my bio, see u there',
+  'but insta has too many eyes 👀 lets go somewhere private, link in my bio, see u there',
+  'honestly i hate texting on insta lol, come find me where we can actually chat, link in my bio, see u there',
+  'but my dms are a nightmare here tbh, find me on my page, link in my bio, see u there',
+  'insta is so chaotic w all the dms tho, lets chat where its just us, link in my bio, see u there',
+  'but i wanna talk where its just us 🙈 link in my bio, see u there',
+  'insta is rly not the vibe for this, come find me somewhere private, link in my bio, see u there',
+];
+
+function pickRandomCloser() {
+  return MSG3_CLOSERS[Math.floor(Math.random() * MSG3_CLOSERS.length)];
+}
+
+// Smart join: if Claude's reaction ends in an emoji, use a space.
+// If it ends in a word/punctuation, use a comma + space.
+function joinReactionAndCloser(reaction, closer) {
+  const trimmed = reaction.trim();
+  if (!trimmed) return closer;
+
+  // Check if last "character" is an emoji (rough heuristic: non-letter, non-space, non-punctuation)
+  const lastChar = trimmed.slice(-2); // grab 2 chars to handle multi-byte emojis
+  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastChar);
+  const endsInPunct = /[.,!?]$/.test(trimmed);
+
+  if (endsInEmoji) {
+    return `${trimmed} ${closer}`;
+  }
+  if (endsInPunct) {
+    return `${trimmed} ${closer}`;
+  }
+  return `${trimmed}, ${closer}`;
+}
+
 async function processQueue() {
   if (isRunning) {
     console.log('[WORKER] Skipping run, previous run still in progress');
@@ -66,8 +113,8 @@ async function handleRow(row) {
 
   const isFinalMessage = replyNumber >= MAX_REPLIES_PER_CONTACT;
 
-  // Claude generates ALL messages (msg 1, 2, AND 3).
-  // For msg 3, the prompt tells Claude to include "see u there" at the end.
+  // Claude generates a short reaction for ALL messages including msg 3.
+  // For msg 3, the prompt instructs Claude to keep it short (2-8 words, reaction only).
   const messagesForClaude = [{ role: 'user', content: message }];
   const convoMeta = {
     message_count: replyNumber,
@@ -75,41 +122,43 @@ async function handleRow(row) {
     is_final_message: isFinalMessage,
   };
 
-  let replyText;
+  let reactionText;
 
   try {
-    replyText = await callOpenAI(messagesForClaude, convoMeta, '');
+    reactionText = await callOpenAI(messagesForClaude, convoMeta, '');
   } catch (err) {
     console.error('[WORKER] Claude call failed:', err.message);
-    replyText = null;
+    reactionText = null;
   }
 
-  // Bare minimum fallback if Claude fully fails (network, timeout, etc).
-  // Not content replacement -- just so we don't send empty string.
-  if (!replyText || !replyText.trim()) {
+  if (!reactionText || !reactionText.trim()) {
     console.error('[WORKER] Claude returned empty for', contactId, '- using minimal fallback');
-    if (isFinalMessage) {
-      replyText = 'mmm insta is so messy babe, come find me on my bio, see u there';
-    } else {
-      replyText = replyNumber === 1 ? 'hiii' : 'lol';
-    }
+    reactionText = isFinalMessage ? 'mmm' : (replyNumber === 1 ? 'hi' : 'lol');
   }
 
-  // GUARANTEE: msg 3 must end with "see u there" so the convo actually ends.
-  // If Claude forgot, append it. Otherwise leave Claude's text alone.
-  if (isFinalMessage && !replyText.toLowerCase().includes('see u there')) {
-    console.warn('[WORKER] Msg 3 missing "see u there" - appending');
-    replyText = replyText.trim();
-    // Add comma if Claude's reply doesn't end with punctuation
-    const lastChar = replyText.slice(-1);
-    if (!/[.,!?]/.test(lastChar)) {
-      replyText += ',';
-    }
-    replyText += ' see u there';
+  // For msg 3: clean up Claude's reaction and append a random closer.
+  // The closers guarantee the "insta is messy + bio + see u there" funnel.
+  let finalReplyText;
+  if (isFinalMessage) {
+    // Strip any "see u there" Claude might have included to avoid double-appending
+    let cleanReaction = reactionText
+      .replace(/see u there/gi, '')
+      .replace(/link in (my )?bio/gi, '')
+      .trim();
+
+    // Trim trailing punctuation/commas after cleanup
+    cleanReaction = cleanReaction.replace(/[,.!?\s]+$/, '').trim();
+
+    const closer = pickRandomCloser();
+    finalReplyText = joinReactionAndCloser(cleanReaction, closer);
+
+    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, closer: closer.slice(0, 50) + '...' });
+  } else {
+    finalReplyText = reactionText.trim();
   }
 
   // Send via ManyChat
-  const sendResult = await sendMessage(manychatContactId, replyText);
+  const sendResult = await sendMessage(manychatContactId, finalReplyText);
   if (!sendResult.ok) {
     console.error('[WORKER] ManyChat send failed for', contactId, sendResult);
     return;
