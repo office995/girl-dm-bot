@@ -1,12 +1,15 @@
 const {
   fetchDueRows,
   claimRow,
+  enqueueMessage,
 } = require('../db/queue');
 const { sendMessage, addTag } = require('../services/manychat');
 const { callOpenAI } = require('../ai/replies');
+const { isUnder18Message, UNDER_18_REPLY } = require('../lib/safety');
 const {
   MAX_REPLIES_PER_CONTACT,
 } = require('../config/env');
+const { supabase } = require('../db/supabase');
 
 let isRunning = false;
 
@@ -37,24 +40,46 @@ function pickRandomCloser() {
   return MSG3_CLOSERS[Math.floor(Math.random() * MSG3_CLOSERS.length)];
 }
 
-// Smart join: if Claude's reaction ends in an emoji, use a space.
-// If it ends in a word/punctuation, use a comma + space.
 function joinReactionAndCloser(reaction, closer) {
   const trimmed = reaction.trim();
   if (!trimmed) return closer;
 
-  // Check if last "character" is an emoji (rough heuristic: non-letter, non-space, non-punctuation)
-  const lastChar = trimmed.slice(-2); // grab 2 chars to handle multi-byte emojis
+  const lastChar = trimmed.slice(-2);
   const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastChar);
   const endsInPunct = /[.,!?]$/.test(trimmed);
 
-  if (endsInEmoji) {
-    return `${trimmed} ${closer}`;
-  }
-  if (endsInPunct) {
+  if (endsInEmoji || endsInPunct) {
     return `${trimmed} ${closer}`;
   }
   return `${trimmed}, ${closer}`;
+}
+
+// Force this contact to MAX replies in the DB so future DMs are blocked
+// at the webhook's "max replies, ghosting" check.
+async function maxOutContact(contactId, manychatContactId) {
+  if (!supabase) return;
+
+  // Insert dummy processed rows to bring the count up to MAX_REPLIES_PER_CONTACT
+  // (in addition to the current row that's already been claimed/processed).
+  const nowIso = new Date().toISOString();
+  const fillerRows = [];
+  for (let i = 0; i < MAX_REPLIES_PER_CONTACT; i++) {
+    fillerRows.push({
+      contact_id: contactId,
+      manychat_contact_id: manychatContactId,
+      message: '[under_18_block]',
+      reply_number: 99,
+      scheduled_at: nowIso,
+      processed: true,
+    });
+  }
+
+  const { error } = await supabase.from('message_queue').insert(fillerRows);
+  if (error) {
+    console.error('[SAFETY] Failed to insert filler rows for', contactId, error.message);
+  } else {
+    console.log('[SAFETY] Maxed out contact', contactId);
+  }
 }
 
 async function processQueue() {
@@ -111,10 +136,35 @@ async function handleRow(row) {
 
   console.log('[WORKER] Handling row', { id: row.id, contactId, replyNumber, msg: message.slice(0, 60) });
 
+  // ====== LAYER 1: Under-18 pre-screen BEFORE calling Claude ======
+  if (isUnder18Message(message)) {
+    console.warn('[SAFETY] Under-18 pattern detected for', contactId, '- hard ending');
+
+    // Send the exact refusal line
+    const sendResult = await sendMessage(manychatContactId, UNDER_18_REPLY);
+    if (!sendResult.ok) {
+      console.error('[SAFETY] Failed to send under-18 refusal to', contactId, sendResult);
+    } else {
+      console.log('[SAFETY] Sent under-18 refusal to', contactId);
+    }
+
+    // Add the end tag in ManyChat
+    const tagResult = await addTag(manychatContactId);
+    if (!tagResult.ok) {
+      console.error('[SAFETY] Failed to add end tag for', contactId, tagResult);
+    } else {
+      console.log('[SAFETY] Added end tag for', contactId);
+    }
+
+    // Max out the contact in the DB as a second layer of blocking
+    await maxOutContact(contactId, manychatContactId);
+
+    return;
+  }
+  // ================================================================
+
   const isFinalMessage = replyNumber >= MAX_REPLIES_PER_CONTACT;
 
-  // Claude generates a short reaction for ALL messages including msg 3.
-  // For msg 3, the prompt instructs Claude to keep it short (2-8 words, reaction only).
   const messagesForClaude = [{ role: 'user', content: message }];
   const convoMeta = {
     message_count: replyNumber,
@@ -136,17 +186,13 @@ async function handleRow(row) {
     reactionText = isFinalMessage ? 'mmm' : (replyNumber === 1 ? 'hi' : 'lol');
   }
 
-  // For msg 3: clean up Claude's reaction and append a random closer.
-  // The closers guarantee the "insta is messy + bio + see u there" funnel.
   let finalReplyText;
   if (isFinalMessage) {
-    // Strip any "see u there" Claude might have included to avoid double-appending
     let cleanReaction = reactionText
       .replace(/see u there/gi, '')
       .replace(/link in (my )?bio/gi, '')
       .trim();
 
-    // Trim trailing punctuation/commas after cleanup
     cleanReaction = cleanReaction.replace(/[,.!?\s]+$/, '').trim();
 
     const closer = pickRandomCloser();
@@ -157,7 +203,6 @@ async function handleRow(row) {
     finalReplyText = reactionText.trim();
   }
 
-  // Send via ManyChat
   const sendResult = await sendMessage(manychatContactId, finalReplyText);
   if (!sendResult.ok) {
     console.error('[WORKER] ManyChat send failed for', contactId, sendResult);
@@ -166,7 +211,6 @@ async function handleRow(row) {
 
   console.log('[WORKER] Sent reply #' + replyNumber + ' to', contactId);
 
-  // Add end tag if this was the final message
   if (isFinalMessage) {
     const tagResult = await addTag(manychatContactId);
     if (!tagResult.ok) {
