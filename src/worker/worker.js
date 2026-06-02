@@ -5,7 +5,12 @@ const {
 } = require('../db/queue');
 const { sendMessage, addTag } = require('../services/manychat');
 const { callOpenAI } = require('../ai/replies');
-const { isUnder18Message, UNDER_18_REPLY } = require('../lib/safety');
+const {
+  isUnder18Message,
+  UNDER_18_REPLY,
+  isBotProbeMessage,
+  pickRandomBotDeflection,
+} = require('../lib/safety');
 const {
   MAX_REPLIES_PER_CONTACT,
 } = require('../config/env');
@@ -13,8 +18,6 @@ const { supabase } = require('../db/supabase');
 
 let isRunning = false;
 
-// 18 closer variants for msg 3. Worker picks one at random and appends to Claude's
-// short reaction. Each one MUST end with "see u there" (last 3 words).
 const MSG3_CLOSERS = [
   'but insta is honestly horrible lol i get like 100 dms here, come find me on my bio, see u there',
   'insta is so messy w all the dms tho, lets chat where its just us, link in my bio, see u there',
@@ -54,20 +57,16 @@ function joinReactionAndCloser(reaction, closer) {
   return `${trimmed}, ${closer}`;
 }
 
-// Force this contact to MAX replies in the DB so future DMs are blocked
-// at the webhook's "max replies, ghosting" check.
 async function maxOutContact(contactId, manychatContactId) {
   if (!supabase) return;
 
-  // Insert dummy processed rows to bring the count up to MAX_REPLIES_PER_CONTACT
-  // (in addition to the current row that's already been claimed/processed).
   const nowIso = new Date().toISOString();
   const fillerRows = [];
   for (let i = 0; i < MAX_REPLIES_PER_CONTACT; i++) {
     fillerRows.push({
       contact_id: contactId,
       manychat_contact_id: manychatContactId,
-      message: '[under_18_block]',
+      message: '[safety_block]',
       reply_number: 99,
       scheduled_at: nowIso,
       processed: true,
@@ -136,11 +135,10 @@ async function handleRow(row) {
 
   console.log('[WORKER] Handling row', { id: row.id, contactId, replyNumber, msg: message.slice(0, 60) });
 
-  // ====== LAYER 1: Under-18 pre-screen BEFORE calling Claude ======
+  // ====== SAFETY LAYER 1: Under-18 pre-screen ======
   if (isUnder18Message(message)) {
     console.warn('[SAFETY] Under-18 pattern detected for', contactId, '- hard ending');
 
-    // Send the exact refusal line
     const sendResult = await sendMessage(manychatContactId, UNDER_18_REPLY);
     if (!sendResult.ok) {
       console.error('[SAFETY] Failed to send under-18 refusal to', contactId, sendResult);
@@ -148,7 +146,6 @@ async function handleRow(row) {
       console.log('[SAFETY] Sent under-18 refusal to', contactId);
     }
 
-    // Add the end tag in ManyChat
     const tagResult = await addTag(manychatContactId);
     if (!tagResult.ok) {
       console.error('[SAFETY] Failed to add end tag for', contactId, tagResult);
@@ -156,12 +153,33 @@ async function handleRow(row) {
       console.log('[SAFETY] Added end tag for', contactId);
     }
 
-    // Max out the contact in the DB as a second layer of blocking
     await maxOutContact(contactId, manychatContactId);
-
     return;
   }
-  // ================================================================
+
+  // ====== SAFETY LAYER 2: Bot/AI probe pre-screen ======
+  // Catches "are you a bot", "managed by agency", "who built you" etc.
+  // Sends a deflection from the pool. Does NOT call Claude.
+  if (isBotProbeMessage(message)) {
+    console.warn('[SAFETY] Bot-probe pattern detected for', contactId, '- sending deflection');
+
+    const deflection = pickRandomBotDeflection();
+    const sendResult = await sendMessage(manychatContactId, deflection);
+    if (!sendResult.ok) {
+      console.error('[SAFETY] Failed to send bot-deflection to', contactId, sendResult);
+      return;
+    }
+    console.log('[SAFETY] Sent bot-deflection to', contactId, ':', deflection);
+
+    // If this was the final message, still close the convo
+    if (replyNumber >= MAX_REPLIES_PER_CONTACT) {
+      const tagResult = await addTag(manychatContactId);
+      if (tagResult.ok) {
+        console.log('[SAFETY] Added end tag for', contactId, '(probe on final msg)');
+      }
+    }
+    return;
+  }
 
   const isFinalMessage = replyNumber >= MAX_REPLIES_PER_CONTACT;
 
