@@ -18,43 +18,74 @@ const { supabase } = require('../db/supabase');
 
 let isRunning = false;
 
-const MSG3_CLOSERS = [
-  'but insta is honestly horrible lol i get like 100 dms here, come find me on my bio, see u there',
-  'insta is so messy w all the dms tho, lets chat where its just us, link in my bio, see u there',
-  'but i cant rly chat on here, way too many dms, find me on my page, see u there',
-  'insta gets so cluttered tho, find me somewhere private, link in my bio, see u there',
-  'but insta is the worst for real chats, come find me on my bio, see u there',
-  'honestly insta is a mess rn, lets talk somewhere else, link in my bio, see u there',
-  'but i cant rly focus on here w so many dms 🙈 find me on my page, see u there',
-  'insta keeps blocking my msgs too 😩 come find me where its chill, link in my bio, see u there',
-  'but lets be real insta sucks for this, come find me somewhere private, link in my bio, see u there',
-  'insta is so overwhelming tho, lets chat somewhere quieter, link in my bio, see u there',
-  'but i barely check insta dms honestly, find me on my page, link in my bio, see u there',
-  'insta is too messy for real talks lol, come find me on my bio, see u there',
-  'but insta has too many eyes 👀 lets go somewhere private, link in my bio, see u there',
-  'honestly i hate texting on insta lol, come find me where we can actually chat, link in my bio, see u there',
-  'but my dms are a nightmare here tbh, find me on my page, link in my bio, see u there',
-  'insta is so chaotic w all the dms tho, lets chat where its just us, link in my bio, see u there',
-  'but i wanna talk where its just us 🙈 link in my bio, see u there',
-  'insta is rly not the vibe for this, come find me somewhere private, link in my bio, see u there',
+// 10 transition lines. Each is the "why insta sucks" part of msg 3.
+// Link is mentioned passively (no "click here / go here" -- that's solicitation).
+const MSG3_TRANSITIONS = [
+  'insta is too restrictive, im way more active on link.me/@lexafuntime',
+  'insta wont let me say much here, im usually on link.me/@lexafuntime',
+  'insta is so restrictive, you can find me on link.me/@lexafuntime',
+  'insta blocks half my msgs, im more active on link.me/@lexafuntime',
+  'insta is too restrictive for me, im here way more link.me/@lexafuntime',
+  'insta doesnt let me do much here, im more active on link.me/@lexafuntime',
+  'insta restricts everything, you can find me on link.me/@lexafuntime',
+  'insta wont let me chat freely, im usually on link.me/@lexafuntime',
+  'insta is wayy too restrictive, im here daily link.me/@lexafuntime',
+  'insta doesnt let me say what i want, im more active on link.me/@lexafuntime',
 ];
 
-function pickRandomCloser() {
-  return MSG3_CLOSERS[Math.floor(Math.random() * MSG3_CLOSERS.length)];
+// Connectors between Claude's reaction and the transition.
+// Empty string = plain comma (no connector). Used ~30% of the time for natural variance.
+const MSG3_CONNECTORS = [
+  'but',
+  'but honestly',
+  'tbh',
+  'btw',
+  'but lowkey',
+  'ngl',
+  'but ngl',
+  'anyway',
+  'and honestly',
+  'and tbh',
+  '', // plain comma, no word connector
+  '', // weighted to ~20% chance of plain comma
+];
+
+const SIGNOFF = 'see u there';
+
+function pickRandomTransition() {
+  return MSG3_TRANSITIONS[Math.floor(Math.random() * MSG3_TRANSITIONS.length)];
 }
 
-function joinReactionAndCloser(reaction, closer) {
-  const trimmed = reaction.trim();
-  if (!trimmed) return closer;
+function pickRandomConnector() {
+  return MSG3_CONNECTORS[Math.floor(Math.random() * MSG3_CONNECTORS.length)];
+}
 
-  const lastChar = trimmed.slice(-2);
-  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastChar);
-  const endsInPunct = /[.,!?]$/.test(trimmed);
+function assembleMsg3(reaction) {
+  let cleanReaction = (reaction || '').trim().replace(/[,.!?\s]+$/, '').trim();
+  const transition = pickRandomTransition();
+  const connector = pickRandomConnector();
 
-  if (endsInEmoji || endsInPunct) {
-    return `${trimmed} ${closer}`;
+  // Detect if reaction ends in emoji
+  const lastTwo = cleanReaction.slice(-2);
+  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastTwo);
+
+  let body;
+  if (!cleanReaction) {
+    // Edge case: no reaction at all -- start with the transition
+    body = transition;
+  } else if (connector) {
+    // With connector: emoji → space + connector + transition;  word → comma + connector + transition
+    body = endsInEmoji
+      ? `${cleanReaction} ${connector} ${transition}`
+      : `${cleanReaction}, ${connector} ${transition}`;
+  } else {
+    // No connector: emoji → space + transition;  word → comma + transition
+    body = endsInEmoji
+      ? `${cleanReaction} ${transition}`
+      : `${cleanReaction}, ${transition}`;
   }
-  return `${trimmed}, ${closer}`;
+
+  return `${body}, ${SIGNOFF}`;
 }
 
 async function maxOutContact(contactId, manychatContactId) {
@@ -158,8 +189,6 @@ async function handleRow(row) {
   }
 
   // ====== SAFETY LAYER 2: Bot/AI probe pre-screen ======
-  // Catches "are you a bot", "managed by agency", "who built you" etc.
-  // Sends a deflection from the pool. Does NOT call Claude.
   if (isBotProbeMessage(message)) {
     console.warn('[SAFETY] Bot-probe pattern detected for', contactId, '- sending deflection');
 
@@ -171,7 +200,6 @@ async function handleRow(row) {
     }
     console.log('[SAFETY] Sent bot-deflection to', contactId, ':', deflection);
 
-    // If this was the final message, still close the convo
     if (replyNumber >= MAX_REPLIES_PER_CONTACT) {
       const tagResult = await addTag(manychatContactId);
       if (tagResult.ok) {
@@ -206,17 +234,19 @@ async function handleRow(row) {
 
   let finalReplyText;
   if (isFinalMessage) {
+    // Strip anything Claude might have added that we don't want doubled
     let cleanReaction = reactionText
       .replace(/see u there/gi, '')
       .replace(/link in (my )?bio/gi, '')
+      .replace(/link\.me\/@?lexafuntime/gi, '')
+      .replace(/https?:\/\/\S+/gi, '')
       .trim();
 
     cleanReaction = cleanReaction.replace(/[,.!?\s]+$/, '').trim();
 
-    const closer = pickRandomCloser();
-    finalReplyText = joinReactionAndCloser(cleanReaction, closer);
+    finalReplyText = assembleMsg3(cleanReaction);
 
-    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, closer: closer.slice(0, 50) + '...' });
+    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, full: finalReplyText.slice(0, 100) });
   } else {
     finalReplyText = reactionText.trim();
   }
