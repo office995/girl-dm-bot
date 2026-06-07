@@ -18,74 +18,46 @@ const { supabase } = require('../db/supabase');
 
 let isRunning = false;
 
-// 10 transition lines. Each is the "why insta sucks" part of msg 3.
-// Link is mentioned passively (no "click here / go here" -- that's solicitation).
-const MSG3_TRANSITIONS = [
-  'insta is too restrictive, im way more active on link.me/@lexafuntime',
-  'insta wont let me say much here, im usually on link.me/@lexafuntime',
-  'insta is so restrictive, you can find me on link.me/@lexafuntime',
-  'insta blocks half my msgs, im more active on link.me/@lexafuntime',
-  'insta is too restrictive for me, im here way more link.me/@lexafuntime',
-  'insta doesnt let me do much here, im more active on link.me/@lexafuntime',
-  'insta restricts everything, you can find me on link.me/@lexafuntime',
-  'insta wont let me chat freely, im usually on link.me/@lexafuntime',
-  'insta is wayy too restrictive, im here daily link.me/@lexafuntime',
-  'insta doesnt let me say what i want, im more active on link.me/@lexafuntime',
+// 18 closer variants. Theme: insta is too restrictive / cant chat freely
+// + bio reference (NEVER a raw URL -- IG flags that as solicitation).
+// Each must end with "see u there" so the worker can detect & add the end tag.
+const MSG3_CLOSERS = [
+  'but honestly insta is too restrictive, link in my bio, see u there',
+  'tbh insta wont let me say much here, link in my bio, see u there',
+  'and honestly insta is so restrictive, find me on my bio, see u there',
+  'but insta blocks half my msgs, link in my bio, see u there',
+  'but ngl insta is too restrictive for me, link in my bio, see u there',
+  'anyway insta doesnt let me do much here, link in my bio, see u there',
+  'btw insta restricts everything, link in my bio, see u there',
+  'but lowkey insta wont let me chat freely, link in my bio, see u there',
+  'and tbh insta is wayy too restrictive, link in my bio, see u there',
+  'but insta doesnt let me say what i want, find me on my bio, see u there',
+  'but i cant rly chat on here, link in my bio, see u there',
+  'tbh i barely check insta dms, link in my bio, see u there',
+  'but my dms are crazy here, link in my bio, see u there',
+  'insta is just too much, link in my bio, see u there',
+  'but ngl insta sucks for chatting, find me on my bio, see u there',
+  'anyway lets not talk on here, link in my bio, see u there',
+  'but i wanna talk where its just us 🙈 link in my bio, see u there',
+  'tbh insta has too many eyes 👀 link in my bio, see u there',
 ];
 
-// Connectors between Claude's reaction and the transition.
-// Empty string = plain comma (no connector). Used ~30% of the time for natural variance.
-const MSG3_CONNECTORS = [
-  'but',
-  'but honestly',
-  'tbh',
-  'btw',
-  'but lowkey',
-  'ngl',
-  'but ngl',
-  'anyway',
-  'and honestly',
-  'and tbh',
-  '', // plain comma, no word connector
-  '', // weighted to ~20% chance of plain comma
-];
-
-const SIGNOFF = 'see u there';
-
-function pickRandomTransition() {
-  return MSG3_TRANSITIONS[Math.floor(Math.random() * MSG3_TRANSITIONS.length)];
+function pickRandomCloser() {
+  return MSG3_CLOSERS[Math.floor(Math.random() * MSG3_CLOSERS.length)];
 }
 
-function pickRandomConnector() {
-  return MSG3_CONNECTORS[Math.floor(Math.random() * MSG3_CONNECTORS.length)];
-}
+function joinReactionAndCloser(reaction, closer) {
+  const trimmed = reaction.trim();
+  if (!trimmed) return closer;
 
-function assembleMsg3(reaction) {
-  let cleanReaction = (reaction || '').trim().replace(/[,.!?\s]+$/, '').trim();
-  const transition = pickRandomTransition();
-  const connector = pickRandomConnector();
+  const lastChar = trimmed.slice(-2);
+  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastChar);
+  const endsInPunct = /[.,!?]$/.test(trimmed);
 
-  // Detect if reaction ends in emoji
-  const lastTwo = cleanReaction.slice(-2);
-  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastTwo);
-
-  let body;
-  if (!cleanReaction) {
-    // Edge case: no reaction at all -- start with the transition
-    body = transition;
-  } else if (connector) {
-    // With connector: emoji → space + connector + transition;  word → comma + connector + transition
-    body = endsInEmoji
-      ? `${cleanReaction} ${connector} ${transition}`
-      : `${cleanReaction}, ${connector} ${transition}`;
-  } else {
-    // No connector: emoji → space + transition;  word → comma + transition
-    body = endsInEmoji
-      ? `${cleanReaction} ${transition}`
-      : `${cleanReaction}, ${transition}`;
+  if (endsInEmoji || endsInPunct) {
+    return `${trimmed} ${closer}`;
   }
-
-  return `${body}, ${SIGNOFF}`;
+  return `${trimmed}, ${closer}`;
 }
 
 async function maxOutContact(contactId, manychatContactId) {
@@ -234,19 +206,20 @@ async function handleRow(row) {
 
   let finalReplyText;
   if (isFinalMessage) {
-    // Strip anything Claude might have added that we don't want doubled
+    // Strip anything Claude might have added that we'll re-append from the closer pool
     let cleanReaction = reactionText
       .replace(/see u there/gi, '')
       .replace(/link in (my )?bio/gi, '')
-      .replace(/link\.me\/@?lexafuntime/gi, '')
+      .replace(/link\.me\/@?\w+/gi, '')
       .replace(/https?:\/\/\S+/gi, '')
       .trim();
 
     cleanReaction = cleanReaction.replace(/[,.!?\s]+$/, '').trim();
 
-    finalReplyText = assembleMsg3(cleanReaction);
+    const closer = pickRandomCloser();
+    finalReplyText = joinReactionAndCloser(cleanReaction, closer);
 
-    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, full: finalReplyText.slice(0, 100) });
+    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, closer: closer.slice(0, 50) + '...' });
   } else {
     finalReplyText = reactionText.trim();
   }
