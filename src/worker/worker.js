@@ -18,43 +18,65 @@ const { supabase } = require('../db/supabase');
 
 let isRunning = false;
 
-// 18 closer variants. Theme: insta is too restrictive / cant chat freely
-// + bio reference (NEVER a raw URL -- IG flags that as solicitation).
-// Each must end with "see u there" so the worker can detect & add the end tag.
+// 20 closer variants. Theme: too many dms here / barely use insta / im active on link.
+// Each contains the raw URL link.me/@lexafuntime (no https://).
+// Each MUST end with "talk soon luv" -- that's the trigger phrase that tells the
+// worker to add the end tag and close the conversation.
+// NO emojis anywhere in these (msg 3 is emoji-free for safety/cleanliness).
 const MSG3_CLOSERS = [
-  'but honestly insta is too restrictive, link in my bio, see u there',
-  'tbh insta wont let me say much here, link in my bio, see u there',
-  'and honestly insta is so restrictive, find me on my bio, see u there',
-  'but insta blocks half my msgs, link in my bio, see u there',
-  'but ngl insta is too restrictive for me, link in my bio, see u there',
-  'anyway insta doesnt let me do much here, link in my bio, see u there',
-  'btw insta restricts everything, link in my bio, see u there',
-  'but lowkey insta wont let me chat freely, link in my bio, see u there',
-  'and tbh insta is wayy too restrictive, link in my bio, see u there',
-  'but insta doesnt let me say what i want, find me on my bio, see u there',
-  'but i cant rly chat on here, link in my bio, see u there',
-  'tbh i barely check insta dms, link in my bio, see u there',
-  'but my dms are crazy here, link in my bio, see u there',
-  'insta is just too much, link in my bio, see u there',
-  'but ngl insta sucks for chatting, find me on my bio, see u there',
-  'anyway lets not talk on here, link in my bio, see u there',
-  'but i wanna talk where its just us 🙈 link in my bio, see u there',
-  'tbh insta has too many eyes 👀 link in my bio, see u there',
+  'but i have way too many dms here, im mostly active on link.me/@lexafuntime, talk soon luv',
+  'but my dms are insane here, im way more active on link.me/@lexafuntime, talk soon luv',
+  'but i barely check insta dms, im usually on link.me/@lexafuntime, talk soon luv',
+  'but i get like 100 dms a day here, im mostly on link.me/@lexafuntime, talk soon luv',
+  'but insta dms are crazy, im more active on link.me/@lexafuntime, talk soon luv',
+  'but ngl i never check insta dms, im on link.me/@lexafuntime, talk soon luv',
+  'but my insta is a mess, im way more on link.me/@lexafuntime, talk soon luv',
+  'but cant rly chat here, im usually on link.me/@lexafuntime, talk soon luv',
+  'but i miss messages here all the time, im mostly on link.me/@lexafuntime, talk soon luv',
+  'but tbh i barely use insta, im usually on link.me/@lexafuntime, talk soon luv',
+  'but my dms here are wild, im way more active on link.me/@lexafuntime, talk soon luv',
+  'but i lose track of msgs here, im mostly on link.me/@lexafuntime, talk soon luv',
+  'but insta is too chaotic for me, im usually on link.me/@lexafuntime, talk soon luv',
+  'but i forget to check dms here lol, im more on link.me/@lexafuntime, talk soon luv',
+  'but my dms here are a mess tbh, im usually on link.me/@lexafuntime, talk soon luv',
+  'but i rly dont use insta much, im mostly on link.me/@lexafuntime, talk soon luv',
+  'but my dms get buried here, im more active on link.me/@lexafuntime, talk soon luv',
+  'but i hardly reply on insta, im usually on link.me/@lexafuntime, talk soon luv',
+  'but cant keep up with insta dms, im mostly on link.me/@lexafuntime, talk soon luv',
+  'but my insta dms are a nightmare, im way more on link.me/@lexafuntime, talk soon luv',
 ];
+
+const SIGNOFF_PHRASE = 'talk soon luv';
 
 function pickRandomCloser() {
   return MSG3_CLOSERS[Math.floor(Math.random() * MSG3_CLOSERS.length)];
 }
 
+// Strip emojis from a string. Used to clean Claude's msg 3 reaction so msg 3
+// stays emoji-free.
+function stripEmojis(text) {
+  return (text || '')
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{1F000}-\u{1F02F}]/gu, '')
+    .replace(/[\u{1F100}-\u{1F1FF}]/gu, '')
+    .replace(/[\u{1F200}-\u{1F2FF}]/gu, '')
+    .replace(/[\u{1F900}-\u{1F9FF}]/gu, '')
+    .replace(/[\u{1FA70}-\u{1FAFF}]/gu, '')
+    .replace(/\uFE0F/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Join reaction + closer. Since msg 3 has NO emojis at all, we just use comma+space
+// if reaction ends in a word, or just space if it ends in punctuation.
 function joinReactionAndCloser(reaction, closer) {
   const trimmed = reaction.trim();
   if (!trimmed) return closer;
 
-  const lastChar = trimmed.slice(-2);
-  const endsInEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(lastChar);
   const endsInPunct = /[.,!?]$/.test(trimmed);
 
-  if (endsInEmoji || endsInPunct) {
+  if (endsInPunct) {
     return `${trimmed} ${closer}`;
   }
   return `${trimmed}, ${closer}`;
@@ -208,18 +230,23 @@ async function handleRow(row) {
   if (isFinalMessage) {
     // Strip anything Claude might have added that we'll re-append from the closer pool
     let cleanReaction = reactionText
+      .replace(/talk soon luv/gi, '')
       .replace(/see u there/gi, '')
       .replace(/link in (my )?bio/gi, '')
       .replace(/link\.me\/@?\w+/gi, '')
       .replace(/https?:\/\/\S+/gi, '')
       .trim();
 
+    // Strip ALL emojis (msg 3 is emoji-free)
+    cleanReaction = stripEmojis(cleanReaction);
+
+    // Trim trailing punctuation/whitespace
     cleanReaction = cleanReaction.replace(/[,.!?\s]+$/, '').trim();
 
     const closer = pickRandomCloser();
     finalReplyText = joinReactionAndCloser(cleanReaction, closer);
 
-    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, closer: closer.slice(0, 50) + '...' });
+    console.log('[WORKER] Msg 3 assembled:', { reaction: cleanReaction, full: finalReplyText.slice(0, 100) });
   } else {
     finalReplyText = reactionText.trim();
   }
@@ -232,12 +259,14 @@ async function handleRow(row) {
 
   console.log('[WORKER] Sent reply #' + replyNumber + ' to', contactId);
 
-  if (isFinalMessage) {
+  // Detect "talk soon luv" in the sent message -> add end tag.
+  // This mirrors the original "see u there" detection pattern.
+  if (finalReplyText.toLowerCase().includes(SIGNOFF_PHRASE)) {
     const tagResult = await addTag(manychatContactId);
     if (!tagResult.ok) {
       console.error('[WORKER] Failed to add end tag for', contactId, tagResult);
     } else {
-      console.log('[WORKER] Added end tag for', contactId);
+      console.log('[WORKER] Added end tag for', contactId, '(detected "' + SIGNOFF_PHRASE + '")');
     }
   }
 }
